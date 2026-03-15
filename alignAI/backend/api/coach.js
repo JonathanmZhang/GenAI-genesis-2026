@@ -4,8 +4,8 @@ import OpenAI from "openai";
 
 // OpenRouter (OpenAI-compatible) client
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,          // your OpenRouter API key
-  baseURL: "https://openrouter.ai/api/v1",     // OpenRouter base URL[web:802]
+  apiKey: process.env.OPENAI_API_KEY, // your OpenRouter API key
+  baseURL: "https://openrouter.ai/api/v1", // OpenRouter base URL[web:802]
 });
 
 export default async function handler(req, res) {
@@ -120,7 +120,8 @@ async function getLLMCoaching({
           "- summary: 1-2 sentences\n" +
           "- tips: 3-5 concrete bullet points.\n" +
           "Each tip must mention either the named stretch or the target body area (e.g. 'for Seated Neck Side Bend', 'for your neck', 'for your shoulders').\n" +
-          "Score must stay within ±5 of baselineScore and be noticeably lower for short, unstable holds.",
+          "Score must stay within ±5 of baselineScore and be noticeably lower for short, unstable holds." +
+          "keep in mind that we are  only asking for 10 seconds, so time shouldn't be a big factor for the score",
       },
       {
         role: "user",
