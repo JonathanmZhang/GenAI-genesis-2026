@@ -117,7 +117,7 @@ async function getLLMCoaching({
           "Your job is to output a JSON object with:\n" +
           "- score: integer 0-100\n" +
           "- label: one of 'Excellent', 'Good', 'Needs work'\n" +
-          "- summary: 1-2 sentences, including the phrase 'coached-by-ai'\n" +
+          "- summary: 1-2 sentences\n" +
           "- tips: 3-5 concrete bullet points.\n" +
           "Each tip must mention either the named stretch or the target body area (e.g. 'for Seated Neck Side Bend', 'for your neck', 'for your shoulders').\n" +
           "Score must stay within ±5 of baselineScore and be noticeably lower for short, unstable holds.",
