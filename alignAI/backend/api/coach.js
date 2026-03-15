@@ -2,8 +2,10 @@
 
 import OpenAI from "openai";
 
+// Use an OpenAI-compatible provider like OpenRouter
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY, // your OpenRouter API key
+  baseURL: "https://openrouter.ai/api/v1", // OpenRouter base URL[web:802]
 });
 
 export default async function handler(req, res) {
@@ -96,10 +98,10 @@ async function getLLMCoaching({
 }) {
   const area = targetArea ?? "stretch";
 
-  // Use OpenAI structured JSON output
+  // Use an OpenRouter model via OpenAI-compatible client
   const response = await client.chat.completions.create({
-    model: "gpt-4.1-mini", // or another JSON-capable chat model
-    response_format: { type: "json_object" }, // JSON mode[web:775][web:781]
+    model: "openrouter/free", // OpenRouter free router; you can swap to a specific free model[web:800][web:802]
+    response_format: { type: "json_object" },
     messages: [
       {
         role: "system",
