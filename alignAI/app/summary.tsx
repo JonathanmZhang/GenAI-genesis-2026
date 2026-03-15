@@ -9,75 +9,108 @@ import {
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 
-type SessionMetrics = {
+type SessionMetricsForBackend = {
   stretchName: string;
-  durationSeconds: number;
-  completed: boolean;
-  score: number;
   targetArea?: "neck" | "shoulders" | "lower_back";
-  perceivedEffort?: "easy" | "medium" | "hard";
+  totalHoldSeconds: number;
+  instabilityEvents: number;
 };
 
 type CoachingFeedback = {
+  score: number;
   summary: string;
   tips: string[];
   label?: string;
 };
 
-// Local fallback “mini‑coach”
-function generateCoachingFeedback(metrics: SessionMetrics): CoachingFeedback {
-  const { stretchName, score, targetArea } = metrics;
+// Local fallback mini‑coach if backend fails
+function localScoreAndFeedback(
+  metrics: SessionMetricsForBackend,
+): CoachingFeedback {
+  const { stretchName, targetArea, totalHoldSeconds, instabilityEvents } =
+    metrics;
+
+  // Same simple scoring as backend stub
+  const maxHold = 20;
+  const holdRatio = Math.max(
+    0,
+    Math.min(1, totalHoldSeconds / maxHold),
+  ); // 0–1
+
+  const baseScore = 40 + holdRatio * 60; // 40–100
+  const instabilityPenalty = Math.min(instabilityEvents, 5) * 8;
+
+  let score = Math.round(baseScore - instabilityPenalty);
+  score = Math.max(0, Math.min(100, score));
+
+  const area = targetArea ?? "stretch";
 
   let summary = "";
   const tips: string[] = [];
   let label = "";
 
-  const area = targetArea ?? "stretch";
+  const holdText =
+    totalHoldSeconds >= 18
+      ? "a strong hold time"
+      : totalHoldSeconds >= 10
+      ? "a decent hold time"
+      : "a relatively short hold";
+
+  const instabilityText =
+    instabilityEvents === 0
+      ? "very steady"
+      : instabilityEvents <= 2
+      ? "mostly steady with a few wobbles"
+      : "quite wobbly at times";
 
   if (score >= 85) {
     label = "Excellent";
-    summary = `Strong ${stretchName} form overall with good consistency.`;
+    summary = `Great work: your ${stretchName} showed ${holdText} and ${instabilityText}.`;
     tips.push(
-      `Keep focusing on slow, relaxed breathing throughout the ${area} hold.`,
+      `On your next ${area} stretch, see if you can keep the same steadiness while slightly easing deeper into the range.`,
     );
     tips.push(
-      "You can gently explore a slightly deeper range if it stays pain free.",
+      "Keep your breathing slow and even; let each exhale help you soften into the position.",
     );
-    tips.push("Maintain this routine to lock in the mobility you’ve built.");
+    tips.push(
+      "If this felt easy, repeat later today or add one more set to lock in the gains.",
+    );
   } else if (score >= 60) {
     label = "Good";
-    summary = `Decent ${stretchName} form, with room to improve stability.`;
+    summary = `Solid effort on ${stretchName}, with ${holdText} but ${instabilityText}.`;
     tips.push(
-      "Once you find the right position, focus on keeping your head and shoulders steady.",
+      "Next round, try entering the stretch more slowly to reduce wobble in the first few seconds.",
     );
     tips.push(
-      "Try backing off the stretch depth a bit so you can hold it more comfortably.",
+      "If you felt unstable, shorten the range just a bit so you can stay balanced.",
     );
     tips.push(
-      "Use a mirror or front camera view to keep an eye on your alignment.",
+      "Aim to add 3–5 more seconds of comfortable hold time on your next attempt.",
     );
   } else {
     label = "Needs work";
-    summary = `Your ${stretchName} stretch was a bit unstable this time.`;
+    summary = `This ${stretchName} attempt had ${holdText} and was ${instabilityText}, which is totally normal when you’re learning.`;
     tips.push(
-      "Start with a smaller, easier range of motion and build up gradually.",
+      "Start smaller: use a gentler range so you can stay in position without fighting to hold it.",
     );
     tips.push(
-      "Use a wall, chair, or desk for light support so you can focus on posture.",
+      "Use a wall, chair, or desk for support so your neck and shoulders can relax.",
     );
     tips.push(
-      "Pause if you feel sharp pain; aim for gentle tension, not discomfort.",
+      "If today felt rough, repeat this stretch tomorrow at a lower intensity and focus on smooth breathing.",
     );
   }
 
-  return { summary, tips, label };
+  return { score, summary, tips, label };
 }
 
 // Call your Vercel coach API
 async function fetchAICoachingFeedback(
-  metrics: SessionMetrics,
+  metrics: SessionMetricsForBackend,
 ): Promise<CoachingFeedback> {
-  const url = "https://alignai-psi.vercel.app/api/coach";
+  const url = "https://alignai-test.vercel.app/api/coach";
+
+  console.log("Sending metrics to coach:", metrics);
 
   const res = await fetch(url, {
     method: "POST",
@@ -85,14 +118,36 @@ async function fetchAICoachingFeedback(
     body: JSON.stringify(metrics),
   });
 
-  if (!res.ok) {
-    throw new Error("Failed to fetch AI feedback");
+  console.log("Coach status:", res.status);
+
+  let data: any;
+  try {
+    data = await res.json();
+    console.log("Coach response JSON:", data);
+  } catch (e) {
+    console.log("Coach JSON parse error:", e);
+    throw new Error("Invalid JSON from coach");
   }
 
-  const data = (await res.json()) as { summary: string; tips: string[] };
+  const score =
+    typeof data.score === "number" && !Number.isNaN(data.score)
+      ? data.score
+      : localScoreAndFeedback(metrics).score;
+
   return {
-    summary: data.summary,
-    tips: data.tips,
+    score,
+    summary:
+      typeof data.summary === "string"
+        ? data.summary
+        : "Here’s some general guidance for your stretch.",
+    tips:
+      Array.isArray(data.tips) && data.tips.length > 0
+        ? data.tips
+        : localScoreAndFeedback(metrics).tips,
+    label:
+      typeof data.label === "string"
+        ? data.label
+        : localScoreAndFeedback(metrics).label,
   };
 }
 
@@ -100,31 +155,35 @@ export default function SummaryScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     stretchName?: string;
-    formScore?: string;
     targetArea?: string;
+    totalHoldSeconds?: string;
+    instabilityEvents?: string;
   }>();
 
   const stretchName = params.stretchName ?? "Stretch";
-  const score = Number(params.formScore ?? 0);
 
-  const metrics: SessionMetrics = useMemo(
+  const metrics: SessionMetricsForBackend = useMemo(
     () => ({
       stretchName,
-      durationSeconds: 10,
-      completed: true,
-      score: isNaN(score) ? 0 : score,
       targetArea:
         params.targetArea === "neck" ||
         params.targetArea === "shoulders" ||
         params.targetArea === "lower_back"
           ? params.targetArea
           : undefined,
+      totalHoldSeconds: Number(params.totalHoldSeconds ?? 0) || 0,
+      instabilityEvents: Number(params.instabilityEvents ?? 0) || 0,
     }),
-    [stretchName, score, params.targetArea],
+    [
+      stretchName,
+      params.targetArea,
+      params.totalHoldSeconds,
+      params.instabilityEvents,
+    ],
   );
 
-  const localFallback = useMemo(
-    () => generateCoachingFeedback(metrics),
+  const fallback = useMemo(
+    () => localScoreAndFeedback(metrics),
     [metrics],
   );
 
@@ -155,7 +214,6 @@ export default function SummaryScreen() {
       }
     };
 
-    // Call the real AI backend
     run();
 
     return () => {
@@ -163,8 +221,8 @@ export default function SummaryScreen() {
     };
   }, [metrics]);
 
-  const feedback = aiFeedback ?? localFallback;
-  const label = feedback.label ?? localFallback.label ?? "";
+  const feedback = aiFeedback ?? fallback;
+  const label = feedback.label ?? fallback.label ?? "";
 
   return (
     <View style={styles.container}>
@@ -173,7 +231,7 @@ export default function SummaryScreen() {
 
         <View style={styles.scoreCard}>
           <Text style={styles.scoreLabel}>Form score</Text>
-          <Text style={styles.scoreValue}>{metrics.score}/100</Text>
+          <Text style={styles.scoreValue}>{feedback.score}/100</Text>
           {!!label && <Text style={styles.scoreTag}>{label}</Text>}
         </View>
 

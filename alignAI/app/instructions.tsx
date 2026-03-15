@@ -66,7 +66,7 @@ export default function InstructionScreen() {
         <TouchableOpacity onPress={() => router.replace('/')}>
           <Text style={styles.secondaryLink}>Skip for now</Text>
         </TouchableOpacity>
-      </View>
+      </View> 
     </View>
   );
 }

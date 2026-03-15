@@ -14,14 +14,6 @@ import { STRETCHES, Stretch } from "../data/stretches";
 
 const HOLD_DURATION_SECONDS = 10;
 
-// Placeholder scoring: later you’ll plug in real pose logic.
-function fakeScoreFromFrameCounter(frameCount: number): number {
-  const base = 60;
-  const maxExtra = 40;
-  const capped = Math.min(frameCount, 40);
-  return base + Math.round((maxExtra * capped) / 40);
-}
-
 type CameraScreenProps = {
   neck?: number;
   shoulders?: number;
@@ -95,10 +87,15 @@ export default function CameraScreen({
   const [sessionStarted, setSessionStarted] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(HOLD_DURATION_SECONDS);
   const [sessionComplete, setSessionComplete] = useState(false);
-  const [finalScore, setFinalScore] = useState(0);
 
   const cameraRef = useRef<CameraView | null>(null);
-  const frameCountRef = useRef(0);
+
+  // Metrics we will send to the backend
+  const [totalHoldSeconds, setTotalHoldSeconds] = useState(0);
+  const [instabilityEvents, setInstabilityEvents] = useState(0);
+
+  // Count how many times they restart (used as instability)
+  const [restartCount, setRestartCount] = useState(0);
 
   // Ask for camera permission once
   useEffect(() => {
@@ -110,37 +107,39 @@ export default function CameraScreen({
   // Track when to navigate
   const [shouldNavigateSummary, setShouldNavigateSummary] = useState(false);
 
-  // Countdown + fake scoring loop (no router calls here)
+  // Countdown loop
   useEffect(() => {
     if (!sessionStarted || sessionComplete) return;
 
-    const frameTimer = setInterval(() => {
-      frameCountRef.current += 1;
-    }, 300);
-
     const countdownTimer = setInterval(() => {
       setSecondsLeft((prev) => {
-        if (prev <= 1) {
+        const next = prev - 1;
+
+        // Elapsed hold time (simple timer-based approximation)
+        const elapsed = HOLD_DURATION_SECONDS - next;
+        setTotalHoldSeconds(
+          Math.max(0, Math.min(HOLD_DURATION_SECONDS, elapsed)),
+        );
+
+        if (next <= 0) {
           clearInterval(countdownTimer);
-          clearInterval(frameTimer);
 
           setSessionComplete(true);
 
-          const score = fakeScoreFromFrameCounter(frameCountRef.current);
-          setFinalScore(score);
-          setShouldNavigateSummary(true);
+          // Use restartCount as a rough proxy for instability
+          setInstabilityEvents(restartCount);
 
+          setShouldNavigateSummary(true);
           return 0;
         }
-        return prev - 1;
+        return next;
       });
     }, 1000);
 
     return () => {
       clearInterval(countdownTimer);
-      clearInterval(frameTimer);
     };
-  }, [sessionStarted, sessionComplete]);
+  }, [sessionStarted, sessionComplete, restartCount]);
 
   // Navigation effect (runs after render)
   useEffect(() => {
@@ -150,12 +149,21 @@ export default function CameraScreen({
       pathname: "/summary",
       params: {
         stretchName: stretch.name,
-        formScore: String(finalScore),
+        targetArea: stretch.area, // if your Stretch type has area
+        totalHoldSeconds: String(totalHoldSeconds),
+        instabilityEvents: String(instabilityEvents),
       },
     });
 
     setShouldNavigateSummary(false);
-  }, [shouldNavigateSummary, finalScore, router, stretch.name]);
+  }, [
+    shouldNavigateSummary,
+    router,
+    stretch.name,
+    stretch.area,
+    totalHoldSeconds,
+    instabilityEvents,
+  ]);
 
   // Permission UI
   if (!permission) {
@@ -185,7 +193,7 @@ export default function CameraScreen({
   if (!isReady) {
     subtitle = "Starting camera…";
   } else if (sessionComplete) {
-    subtitle = `Session complete! Score: ${finalScore}`;
+    subtitle = `Session complete!`;
   } else if (sessionStarted) {
     subtitle = `Hold the stretch… ${secondsLeft}s left`;
   } else {
@@ -242,18 +250,23 @@ export default function CameraScreen({
             if (!isReady) return;
 
             if (sessionComplete) {
+              // They are restarting after a completed session → count as instability
+              setRestartCount((prev) => prev + 1);
+
+              // Reset for another round
               setSessionComplete(false);
               setSessionStarted(false);
               setSecondsLeft(HOLD_DURATION_SECONDS);
-              frameCountRef.current = 0;
-              setFinalScore(0);
+              setTotalHoldSeconds(0);
+              setInstabilityEvents(0);
               return;
             }
 
+            // Starting a new session
             setSessionStarted(true);
             setSecondsLeft(HOLD_DURATION_SECONDS);
-            frameCountRef.current = 0;
-            setFinalScore(0);
+            setTotalHoldSeconds(0);
+            setInstabilityEvents(0);
             console.log("Stretch hold session started");
           }}
           disabled={mainButtonDisabled}
@@ -262,8 +275,8 @@ export default function CameraScreen({
             {sessionComplete
               ? "Restart"
               : sessionStarted
-                ? "Running"
-                : "Lock Distance & Start"}
+              ? "Running"
+              : "Lock Distance & Start"}
           </Text>
         </TouchableOpacity>
       </View>
