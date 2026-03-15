@@ -109,8 +109,9 @@ async function getLLMCoaching({
           "You are a physiotherapist and movement coach.\n" +
           "You receive simple metrics from a webcam stretch session.\n" +
           "Your job is to output a JSON object with a 0-100 score, a short 1-2 sentence summary, a label, and 3-5 concrete tips.\n" +
-          "Include the phrase 'coached-by-ai' somewhere in the summary so we can confirm this text came from you.\n" +
-          "Score should roughly follow the given baselineScore but you can adjust it up or down by up to 10 points based on your reasoning.",
+          "Score should roughly follow the given baselineScore but you can adjust it up or down by up to 10 points based on your reasoning." +
+          "but please do a lot of thinking when making your decision. Ask questions like, is the person moving a lot? are they keeping their " + 
+          "stretch position still? are they even in frame? accurately give a good score, so the user can benefit from it in the future.",
       },
       {
         role: "user",
