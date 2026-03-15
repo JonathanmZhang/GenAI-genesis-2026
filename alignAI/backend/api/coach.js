@@ -2,10 +2,10 @@
 
 import OpenAI from "openai";
 
-// Use an OpenAI-compatible provider like OpenRouter
+// OpenRouter (OpenAI-compatible) client
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // your OpenRouter API key
-  baseURL: "https://openrouter.ai/api/v1", // OpenRouter base URL[web:802]
+  apiKey: process.env.OPENAI_API_KEY,          // your OpenRouter API key
+  baseURL: "https://openrouter.ai/api/v1",     // OpenRouter base URL[web:802]
 });
 
 export default async function handler(req, res) {
@@ -46,7 +46,7 @@ export default async function handler(req, res) {
         ? body.instabilityEvents
         : 0;
 
-    // Baseline heuristic so the model isn't guessing from scratch
+    // Harsher baseline so weak sessions get low scores
     const baselineScore = computeBaselineScore({
       totalHoldSeconds,
       instabilityEvents,
@@ -78,12 +78,18 @@ export default async function handler(req, res) {
   }
 }
 
+// Harsher baseline scoring
 function computeBaselineScore({ totalHoldSeconds, instabilityEvents }) {
   const maxHold = 20;
   const holdRatio = Math.max(0, Math.min(1, totalHoldSeconds / maxHold)); // 0–1
 
-  const baseScore = 40 + holdRatio * 60; // 40–100
-  const instabilityPenalty = Math.min(instabilityEvents, 5) * 8;
+  // Stricter scale:
+  // - Very short holds get poor scores.
+  // - Full holds can reach high scores but not 100 without stability.
+  let baseScore = 20 + holdRatio * 60; // 20–80
+
+  // Bigger penalty per instability event
+  const instabilityPenalty = Math.min(instabilityEvents, 5) * 10;
 
   let score = Math.round(baseScore - instabilityPenalty);
   return Math.max(0, Math.min(100, score));
@@ -98,9 +104,8 @@ async function getLLMCoaching({
 }) {
   const area = targetArea ?? "stretch";
 
-  // Use an OpenRouter model via OpenAI-compatible client
   const response = await client.chat.completions.create({
-    model: "openrouter/free", // OpenRouter free router; you can swap to a specific free model[web:800][web:802]
+    model: "openrouter/free", // free router; you can swap to a specific free model[web:800][web:802]
     response_format: { type: "json_object" },
     messages: [
       {
@@ -108,11 +113,14 @@ async function getLLMCoaching({
         content:
           "You are a physiotherapist and movement coach.\n" +
           "You receive simple metrics from a webcam stretch session.\n" +
-          "Your job is to output a JSON object with a 0-100 score, a short 1-2 sentence summary, a label, and 3-5 concrete tips.\n" +
-          "Score should roughly follow the given baselineScore but you can adjust it up or down by up to 10 points based on your reasoning." +
-          "but please do a lot of thinking when making your decision. Ask questions like, is the person moving a lot? are they keeping their " + 
-          "stretch position still? are they even in frame? accurately give a good score, so the user can benefit from it in the future." + 
-          "for example, if there is no person in frame, give a score of 0. If they arent even doing a proper stretch, dont give a score higher than 50.",
+          "Use stretchName and targetArea to make exercise-specific comments.\n" +
+          "Your job is to output a JSON object with:\n" +
+          "- score: integer 0-100\n" +
+          "- label: one of 'Excellent', 'Good', 'Needs work'\n" +
+          "- summary: 1-2 sentences, including the phrase 'coached-by-ai'\n" +
+          "- tips: 3-5 concrete bullet points.\n" +
+          "Each tip must mention either the named stretch or the target body area (e.g. 'for Seated Neck Side Bend', 'for your neck', 'for your shoulders').\n" +
+          "Score must stay within ±5 of baselineScore and be noticeably lower for short, unstable holds.",
       },
       {
         role: "user",
@@ -122,6 +130,13 @@ async function getLLMCoaching({
           totalHoldSeconds,
           instabilityEvents,
           baselineScore,
+          guidelines: {
+            stretchExamples: [
+              "Seated Neck Side Bend: sitting, tilting one ear toward the shoulder.",
+              "Desk Shoulder Opener: hands on desk, chest dropping between arms.",
+              "Chair Hip Stretch: ankle on opposite knee, leaning forward.",
+            ],
+          },
         }),
       },
     ],
@@ -133,7 +148,6 @@ async function getLLMCoaching({
   try {
     parsed = content && JSON.parse(content);
   } catch {
-    // If parsing fails, fall back to a simple template using baselineScore
     const fallbackScore = baselineScore;
     const fallback = fallbackCoachingFromBaseline({
       stretchName,
@@ -145,20 +159,38 @@ async function getLLMCoaching({
 
   const score =
     typeof parsed.score === "number" && !Number.isNaN(parsed.score)
-      ? Math.max(0, Math.min(100, Math.round(parsed.score)))
+      ? Math.max(
+          0,
+          Math.min(
+            100,
+            // Clamp model score around baseline (±5)
+            Math.round(
+              Math.max(
+                baselineScore - 5,
+                Math.min(baselineScore + 5, parsed.score),
+              ),
+            ),
+          ),
+        )
       : baselineScore;
+
+  const fallbackBase = fallbackCoachingFromBaseline({
+    stretchName,
+    area,
+    score,
+  });
 
   const summary =
     typeof parsed.summary === "string" && parsed.summary.trim().length > 0
       ? parsed.summary.trim()
-      : fallbackCoachingFromBaseline({ stretchName, area, score }).summary;
+      : fallbackBase.summary;
 
   const tips =
     Array.isArray(parsed.tips) && parsed.tips.length > 0
       ? parsed.tips
           .filter((t) => typeof t === "string" && t.trim().length > 0)
           .slice(0, 5)
-      : fallbackCoachingFromBaseline({ stretchName, area, score }).tips;
+      : fallbackBase.tips;
 
   const label =
     typeof parsed.label === "string" && parsed.label.trim().length > 0
@@ -174,34 +206,34 @@ function fallbackCoachingFromBaseline({ stretchName, area, score }) {
   let label = labelFromScore(score);
 
   if (score >= 85) {
-    summary = `Great work: your ${stretchName} looked very steady with good control.`;
+    summary = `Great work: your ${stretchName} looked very steady with good control (coached-by-ai).`;
     tips.push(
       `On your next ${area} stretch, keep this same steadiness and experiment with 2–3 extra seconds of hold time.`,
     );
     tips.push(
-      "Use each exhale to let your shoulders and jaw soften a little more.",
+      `For ${stretchName}, keep your breathing slow and even so your neck and shoulders stay relaxed.`,
     );
     tips.push(
-      "If this felt easy, add a second set later today to reinforce the pattern.",
+      `If ${stretchName} felt easy, add a second set later today to reinforce the pattern.`,
     );
   } else if (score >= 60) {
-    summary = `Solid effort on ${stretchName}, with some room to improve stability and comfort.`;
+    summary = `Solid effort on ${stretchName}, with some room to improve stability and comfort (coached-by-ai).`;
     tips.push(
-      "Next round, move into the stretch more slowly to reduce wobble in the first few seconds.",
+      `On the next ${stretchName}, move into the position more slowly to reduce wobble in the first few seconds.`,
     );
     tips.push(
-      "If you felt unstable, shorten the range slightly so you can stay balanced.",
+      `If your ${area} felt unstable during ${stretchName}, shorten the range slightly so you can stay balanced.`,
     );
     tips.push(
-      "Aim to add 3–5 seconds of comfortable hold time on your next attempt.",
+      `Aim to add 3–5 seconds of comfortable hold time on your next ${stretchName}.`,
     );
   } else {
-    summary = `This ${stretchName} attempt was challenging, which is normal when you’re still learning the position.`;
+    summary = `This ${stretchName} attempt was challenging, which is normal when you’re still learning the position (coached-by-ai).`;
     tips.push(
-      "Start smaller: pick a gentler range so you can stay in position without fighting to hold it.",
+      `For ${stretchName}, start with a gentler range so you can stay in position without fighting to hold it.`,
     );
     tips.push(
-      "Use a wall, chair, or desk for light support so your upper body can relax.",
+      `Use a wall, chair, or desk for light support so your ${area} can relax during ${stretchName}.`,
     );
     tips.push(
       "Focus on smooth, quiet breathing; if you need to gasp for air, ease off the stretch a bit.",
