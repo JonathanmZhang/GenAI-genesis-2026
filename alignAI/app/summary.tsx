@@ -73,12 +73,11 @@ function generateCoachingFeedback(metrics: SessionMetrics): CoachingFeedback {
   return { summary, tips, label };
 }
 
-// Placeholder for real GenAI API call
+// Call your Vercel coach API
 async function fetchAICoachingFeedback(
   metrics: SessionMetrics,
 ): Promise<CoachingFeedback> {
-  // TODO: Replace with your real backend URL once you have it
-  const url = "https://your-backend.com/api/coach";
+  const url = "https://alignai-psi.vercel.app/api/coach";
 
   const res = await fetch(url, {
     method: "POST",
@@ -156,9 +155,8 @@ export default function SummaryScreen() {
       }
     };
 
-    // Call the real AI backend here once you have it.
-    // For now, you can comment this out to avoid network errors.
-    // run();
+    // Call the real AI backend
+    run();
 
     return () => {
       cancelled = true;
